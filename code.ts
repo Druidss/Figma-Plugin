@@ -1,37 +1,66 @@
-// This plugin will open a window to prompt the user to enter a number, and
-// it will then create that many rectangles on the screen.
-
-// This file holds the main code for plugins. Code in this file has access to
-// the *figma document* via the figma global object.
-// You can access browser APIs in the <script> tag inside "ui.html" which has a
-// full browser environment (See https://www.figma.com/plugin-docs/how-plugins-run).
-
-// This shows the HTML page in "ui.html".
 figma.showUI(__html__);
 
-// Calls to "parent.postMessage" from within the HTML page will trigger this
-// callback. The callback will be passed the "pluginMessage" property of the
-// posted message.
-figma.ui.onmessage =  (msg: {type: string, count: number}) => {
-  // One way of distinguishing between different types of messages sent from
-  // your HTML page is to use an object with a "type" property like this.
-  if (msg.type === 'create-shapes') {
-    // This plugin creates rectangles on the screen.
-    const numberOfRectangles = msg.count;
+let timer = undefined;
 
-    const nodes: SceneNode[] = [];
-    for (let i = 0; i < numberOfRectangles; i++) {
-      const rect = figma.createRectangle();
-      rect.x = i * 150;
-      rect.fills = [{ type: 'SOLID', color: { r: 1, g: 0.5, b: 0 } }];
-      figma.currentPage.appendChild(rect);
-      nodes.push(rect);
+figma.ui.onmessage = async message => {
+  if (message.query !== undefined) {
+    if (timer) {
+      clearTimeout(timer);
     }
-    figma.currentPage.selection = nodes;
-    figma.viewport.scrollAndZoomIntoView(nodes);
+    if (message.query) {
+      searchFor(message.query);
+    }
+  } else if (message.show) {
+    const node = await figma.getNodeByIdAsync(message.show);
+    if (node.type === 'DOCUMENT' || node.type === 'PAGE') {
+      // DOCUMENTs and PAGEs can't be put into the selection.
+      return;
+    }
+    figma.currentPage.selection = [node];
+    figma.viewport.scrollAndZoomIntoView([node]);
+  } else if (message.quit) {
+    figma.closePlugin();
+  }
+}
+
+// This is a generator that recursively produces all the nodes in subtree
+// starting at the given node
+function* walkTree(node) {
+  yield node;
+  const children = node.children;
+  if (children) {
+    for (const child of children) {
+      yield* walkTree(child)
+    }
+  }
+}
+
+function searchFor(query) {
+  query = query.toLowerCase()
+  const walker = walkTree(figma.currentPage)
+
+  function processOnce() {
+    const results = [];
+    let count = 0;
+    let done = true;
+    let res
+    while (!(res = walker.next()).done) {
+      const node = res.value
+      if (node.type === 'TEXT') {
+        const characters = node.characters.toLowerCase()
+        if (characters.includes(query)) {
+          results.push(node.id);
+        }
+      }
+      if (++count === 1000) {
+        done = false
+        timer = setTimeout(processOnce, 20)
+        break
+      }
+    }
+
+    figma.ui.postMessage({ query, results, done })
   }
 
-  // Make sure to close the plugin when you're done. Otherwise the plugin will
-  // keep running, which shows the cancel button at the bottom of the screen.
-  figma.closePlugin();
-};
+  processOnce()
+}
